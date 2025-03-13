@@ -254,6 +254,7 @@ impl LogService for LogServer {
             return Err(Status::invalid_argument("Too many records"));
         }
         let record_count = messages.len() as i32;
+        tracing::error!("Writing {} records to log", record_count);
         log.append_many(messages)
             .await
             .map_err(|err| Status::unknown(err.to_string()))?;
