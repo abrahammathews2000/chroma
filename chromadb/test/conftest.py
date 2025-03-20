@@ -16,6 +16,7 @@ from typing import (
     cast,
 )
 from uuid import UUID
+import yaml
 
 import hypothesis
 import pytest
@@ -39,6 +40,7 @@ from chromadb.api.async_client import (
 from chromadb.utils.async_to_sync import async_class_to_sync
 import logging
 import sys
+import chromadb_rust_bindings
 
 logger = logging.getLogger(__name__)
 
@@ -175,62 +177,23 @@ def _run_server(
     port: int,
     is_persistent: bool = False,
     persist_directory: Optional[str] = None,
-    chroma_server_authn_provider: Optional[str] = None,
-    chroma_server_authn_credentials_file: Optional[str] = None,
-    chroma_server_authn_credentials: Optional[str] = None,
-    chroma_auth_token_transport_header: Optional[str] = None,
-    chroma_server_authz_provider: Optional[str] = None,
-    chroma_server_authz_config_file: Optional[str] = None,
-    chroma_server_ssl_certfile: Optional[str] = None,
-    chroma_server_ssl_keyfile: Optional[str] = None,
-    chroma_overwrite_singleton_tenant_database_access_from_auth: Optional[bool] = False,
 ) -> None:
     """Run a Chroma server locally"""
+    config = {
+        "port": port,
+        "allow_reset": True,
+    }
+
     if is_persistent and persist_directory:
-        settings = Settings(
-            chroma_api_impl="chromadb.api.segment.SegmentAPI",
-            chroma_sysdb_impl="chromadb.db.impl.sqlite.SqliteDB",
-            chroma_producer_impl="chromadb.db.impl.sqlite.SqliteDB",
-            chroma_consumer_impl="chromadb.db.impl.sqlite.SqliteDB",
-            chroma_segment_manager_impl="chromadb.segment.impl.manager.local.LocalSegmentManager",
-            is_persistent=is_persistent,
-            persist_directory=persist_directory,
-            allow_reset=True,
-            chroma_server_authn_provider=chroma_server_authn_provider,
-            chroma_server_authn_credentials_file=chroma_server_authn_credentials_file,
-            chroma_server_authn_credentials=chroma_server_authn_credentials,
-            chroma_auth_token_transport_header=chroma_auth_token_transport_header,
-            chroma_server_authz_provider=chroma_server_authz_provider,
-            chroma_server_authz_config_file=chroma_server_authz_config_file,
-            chroma_overwrite_singleton_tenant_database_access_from_auth=chroma_overwrite_singleton_tenant_database_access_from_auth,
-        )
-    else:
-        settings = Settings(
-            chroma_api_impl="chromadb.api.segment.SegmentAPI",
-            chroma_sysdb_impl="chromadb.db.impl.sqlite.SqliteDB",
-            chroma_producer_impl="chromadb.db.impl.sqlite.SqliteDB",
-            chroma_consumer_impl="chromadb.db.impl.sqlite.SqliteDB",
-            chroma_segment_manager_impl="chromadb.segment.impl.manager.local.LocalSegmentManager",
-            is_persistent=False,
-            allow_reset=True,
-            chroma_server_authn_provider=chroma_server_authn_provider,
-            chroma_server_authn_credentials_file=chroma_server_authn_credentials_file,
-            chroma_server_authn_credentials=chroma_server_authn_credentials,
-            chroma_auth_token_transport_header=chroma_auth_token_transport_header,
-            chroma_server_authz_provider=chroma_server_authz_provider,
-            chroma_server_authz_config_file=chroma_server_authz_config_file,
-            chroma_overwrite_singleton_tenant_database_access_from_auth=chroma_overwrite_singleton_tenant_database_access_from_auth,
-        )
-    server = chromadb.server.fastapi.FastAPI(settings)
-    uvicorn.run(
-        server.app(),
-        host="0.0.0.0",
-        port=port,
-        log_level="error",
-        timeout_keep_alive=30,
-        ssl_keyfile=chroma_server_ssl_keyfile,
-        ssl_certfile=chroma_server_ssl_certfile,
-    )
+        config["persist_path"] = persist_directory
+
+    tmp_config_dir = tempfile.mkdtemp()
+    tmp_config_path = os.path.join(tmp_config_dir, "config.yaml")
+    with open(tmp_config_path, "w") as f:
+        f.write(yaml.dump(config))
+
+    # TODO(@codetheweb): this should use a method from the Rust bindings to start the server and wait for it to be ready instead of going through the CLI. That would let us avoid the sleep below.
+    chromadb_rust_bindings.cli(["chroma", "run", tmp_config_path])
 
 
 def _await_server(api: ServerAPI, attempts: int = 0) -> None:
@@ -244,52 +207,25 @@ def _await_server(api: ServerAPI, attempts: int = 0) -> None:
             _await_server(api, attempts + 1)
 
 
-def _fastapi_fixture(
+def http_server_fixture(
     is_persistent: bool = False,
     chroma_api_impl: str = "chromadb.api.fastapi.FastAPI",
-    chroma_server_authn_provider: Optional[str] = None,
     chroma_client_auth_provider: Optional[str] = None,
-    chroma_server_authn_credentials_file: Optional[str] = None,
-    chroma_server_authn_credentials: Optional[str] = None,
     chroma_client_auth_credentials: Optional[str] = None,
     chroma_auth_token_transport_header: Optional[str] = None,
-    chroma_server_authz_provider: Optional[str] = None,
-    chroma_server_authz_config_file: Optional[str] = None,
     chroma_server_ssl_certfile: Optional[str] = None,
-    chroma_server_ssl_keyfile: Optional[str] = None,
     chroma_overwrite_singleton_tenant_database_access_from_auth: Optional[bool] = False,
 ) -> Generator[System, None, None]:
-    """Fixture generator that launches a server in a separate process, and yields a
-    fastapi client connect to it"""
-
     port = find_free_port()
     ctx = multiprocessing.get_context("spawn")
     args: Tuple[
         int,
         bool,
         Optional[str],
-        Optional[str],
-        Optional[str],
-        Optional[str],
-        Optional[str],
-        Optional[str],
-        Optional[str],
-        Optional[str],
-        Optional[str],
-        Optional[bool],
     ] = (
         port,
         False,
         None,
-        chroma_server_authn_provider,
-        chroma_server_authn_credentials_file,
-        chroma_server_authn_credentials,
-        chroma_auth_token_transport_header,
-        chroma_server_authz_provider,
-        chroma_server_authz_config_file,
-        chroma_server_ssl_certfile,
-        chroma_server_ssl_keyfile,
-        chroma_overwrite_singleton_tenant_database_access_from_auth,
     )
 
     def run(args: Any) -> Generator[System, None, None]:
@@ -322,15 +258,6 @@ def _fastapi_fixture(
             port,
             is_persistent,
             persist_directory.name,
-            chroma_server_authn_provider,
-            chroma_server_authn_credentials_file,
-            chroma_server_authn_credentials,
-            chroma_auth_token_transport_header,
-            chroma_server_authz_provider,
-            chroma_server_authz_config_file,
-            chroma_server_ssl_certfile,
-            chroma_server_ssl_keyfile,
-            chroma_overwrite_singleton_tenant_database_access_from_auth,
         )
 
         yield from run(args)
@@ -351,27 +278,18 @@ def _fastapi_fixture(
         yield from run(args)
 
 
-def fastapi() -> Generator[System, None, None]:
-    return _fastapi_fixture(is_persistent=False)
+def start_http_server_and_get_client() -> Generator[System, None, None]:
+    return http_server_fixture(is_persistent=False)
 
 
-def async_fastapi() -> Generator[System, None, None]:
-    return _fastapi_fixture(
+def start_persistent_http_server_and_get_client() -> Generator[System, None, None]:
+    return http_server_fixture(is_persistent=True)
+
+
+def start_http_server_and_get_async_client() -> Generator[System, None, None]:
+    return http_server_fixture(
         is_persistent=False,
         chroma_api_impl="chromadb.api.async_fastapi.AsyncFastAPI",
-    )
-
-
-def fastapi_persistent() -> Generator[System, None, None]:
-    return _fastapi_fixture(is_persistent=True)
-
-
-def fastapi_ssl() -> Generator[System, None, None]:
-    generate_self_signed_certificate()
-    return _fastapi_fixture(
-        is_persistent=False,
-        chroma_server_ssl_certfile="./servercert.pem",
-        chroma_server_ssl_keyfile="./serverkey.pem",
     )
 
 
@@ -395,151 +313,6 @@ def basic_http_client() -> Generator[System, None, None]:
     system.start()
     yield system
     system.stop()
-
-
-def fastapi_server_basic_auth_valid_cred_single_user() -> Generator[System, None, None]:
-    # This (and similar usage below) should use the delete_on_close parameter
-    # instead of delete=False, but it's only available in Python 3.12 and later.
-    # We must explicitly close the file before spawning a subprocess to avoid
-    # file locking issues on Windows.
-    with tempfile.NamedTemporaryFile("w", suffix=".htpasswd", delete=False) as f:
-        f.write("admin:$2y$05$e5sRb6NCcSH3YfbIxe1AGu2h5K7OOd982OXKmd8WyQ3DRQ4MvpnZS\n")
-        f.close()
-
-        for item in _fastapi_fixture(
-            is_persistent=False,
-            chroma_server_authn_provider="chromadb.auth.basic_authn.BasicAuthenticationServerProvider",
-            chroma_server_authn_credentials_file=f.name,
-            chroma_client_auth_provider="chromadb.auth.basic_authn.BasicAuthClientProvider",
-            chroma_client_auth_credentials="admin:admin",
-        ):
-            yield item
-
-
-def fastapi_server_basic_auth_valid_cred_multiple_users() -> (
-    Generator[System, None, None]
-):
-    creds = {
-        "user": "$2y$10$kY9hn.Wlfcj7n1Cnjmy1kuIhEFIVBsfbNWLQ5ahoKmdc2HLA4oP6i",
-        "user2": "$2y$10$CymQ63tic/DRj8dD82915eoM4ke3d6RaNKU4dj4IVJlHyea0yeGDS",
-        "admin": "$2y$05$e5sRb6NCcSH3YfbIxe1AGu2h5K7OOd982OXKmd8WyQ3DRQ4MvpnZS",
-    }
-    with tempfile.NamedTemporaryFile("w", suffix=".htpasswd", delete=False) as f:
-        for user, cred in creds.items():
-            f.write(f"{user}:{cred}\n")
-        f.close()
-
-        for item in _fastapi_fixture(
-            is_persistent=False,
-            chroma_server_authn_provider="chromadb.auth.basic_authn.BasicAuthenticationServerProvider",
-            chroma_server_authn_credentials_file=f.name,
-            chroma_client_auth_provider="chromadb.auth.basic_authn.BasicAuthClientProvider",
-            chroma_client_auth_credentials="admin:admin",
-        ):
-            yield item
-
-
-def fastapi_server_basic_auth_invalid_cred() -> Generator[System, None, None]:
-    with tempfile.NamedTemporaryFile("w", suffix=".htpasswd", delete=False) as f:
-        f.write("admin:$2y$05$e5sRb6NCcSH3YfbIxe1AGu2h5K7OOd982OXKmd8WyQ3DRQ4MvpnZS\n")
-        f.close()
-
-        for item in _fastapi_fixture(
-            is_persistent=False,
-            chroma_server_authn_provider="chromadb.auth.basic_authn.BasicAuthenticationServerProvider",
-            chroma_server_authn_credentials_file=f.name,
-            chroma_client_auth_provider="chromadb.auth.basic_authn.BasicAuthClientProvider",
-            chroma_client_auth_credentials="admin:admin1",
-        ):
-            yield item
-
-
-def fastapi_server_basic_authn_rbac_authz() -> Generator[System, None, None]:
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".htpasswd", delete=False
-    ) as server_authn_file:
-        server_authn_file.write(
-            "admin:$2y$05$e5sRb6NCcSH3YfbIxe1AGu2h5K7OOd982OXKmd8WyQ3DRQ4MvpnZS\n"
-        )
-        server_authn_file.close()
-
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".authz", delete=False
-        ) as server_authz_file:
-            server_authz_file.write(
-                """
-roles_mapping:
-    admin:
-        actions:
-            [
-                "system:reset",
-                "tenant:create_tenant",
-                "tenant:get_tenant",
-                "db:create_database",
-                "db:get_database",
-                "db:list_collections",
-                "db:create_collection",
-                "db:get_or_create_collection",
-                "collection:get_collection",
-                "collection:delete_collection",
-                "collection:update_collection",
-                "collection:add",
-                "collection:delete",
-                "collection:get",
-                "collection:query",
-                "collection:peek",
-                "collection:update",
-                "collection:upsert",
-                "collection:count",
-            ]
-users:
-- id: admin
-  role: admin
-    """
-            )
-            server_authz_file.close()
-
-            for item in _fastapi_fixture(
-                is_persistent=False,
-                chroma_client_auth_provider="chromadb.auth.basic_authn.BasicAuthClientProvider",
-                chroma_client_auth_credentials="admin:admin",
-                chroma_server_authn_provider="chromadb.auth.basic_authn.BasicAuthenticationServerProvider",
-                chroma_server_authn_credentials_file=server_authn_file.name,
-                chroma_server_authz_provider="chromadb.auth.simple_rbac_authz.SimpleRBACAuthorizationProvider",
-                chroma_server_authz_config_file=server_authz_file.name,
-            ):
-                yield item
-
-
-def fastapi_fixture_admin_and_singleton_tenant_db_user() -> (
-    Generator[System, None, None]
-):
-    with tempfile.NamedTemporaryFile("w", suffix=".authn", delete=False) as f:
-        f.write(
-            """
-users:
-  - id: admin
-    tokens:
-      - admin-token
-  - id: singleton_user
-    tenant: singleton_tenant
-    databases:
-      - singleton_database
-    tokens:
-      - singleton-token
-"""
-        )
-        f.close()
-
-        for item in _fastapi_fixture(
-            is_persistent=False,
-            chroma_overwrite_singleton_tenant_database_access_from_auth=True,
-            chroma_client_auth_provider="chromadb.auth.token_authn.TokenAuthClientProvider",
-            chroma_client_auth_credentials="admin-token",
-            chroma_server_authn_provider="chromadb.auth.token_authn.TokenAuthenticationServerProvider",
-            chroma_server_authn_credentials_file=f.name,
-        ):
-            yield item
 
 
 def integration() -> Generator[System, None, None]:
@@ -658,9 +431,9 @@ def sqlite_persistent(request: pytest.FixtureRequest) -> Generator[System, None,
 
 def system_fixtures() -> List[Callable[[], Generator[System, None, None]]]:
     fixtures = [
-        fastapi,
-        async_fastapi,
-        fastapi_persistent,
+        start_http_server_and_get_client,
+        start_http_server_and_get_async_client,
+        start_persistent_http_server_and_get_client,
         sqlite_fixture,
         sqlite_persistent_fixture,
     ]
@@ -690,52 +463,6 @@ def system_http_server_fixtures() -> List[Callable[[], Generator[System, None, N
     return fixtures
 
 
-def system_fixtures_auth() -> List[Callable[[], Generator[System, None, None]]]:
-    fixtures = [
-        fastapi_server_basic_auth_valid_cred_single_user,
-        fastapi_server_basic_auth_valid_cred_multiple_users,
-    ]
-    return fixtures
-
-
-def system_fixtures_authn_rbac_authz() -> (
-    List[Callable[[], Generator[System, None, None]]]
-):
-    fixtures = [fastapi_server_basic_authn_rbac_authz]
-    return fixtures
-
-
-def system_fixtures_root_and_singleton_tenant_db_user() -> (
-    List[Callable[[], Generator[System, None, None]]]
-):
-    fixtures = [fastapi_fixture_admin_and_singleton_tenant_db_user]
-    return fixtures
-
-
-def system_fixtures_wrong_auth() -> List[Callable[[], Generator[System, None, None]]]:
-    fixtures = [fastapi_server_basic_auth_invalid_cred]
-    return fixtures
-
-
-def system_fixtures_ssl() -> List[Callable[[], Generator[System, None, None]]]:
-    fixtures = [fastapi_ssl]
-    return fixtures
-
-
-@pytest.fixture(scope="module", params=system_fixtures_wrong_auth())
-def system_wrong_auth(
-    request: pytest.FixtureRequest,
-) -> Generator[ServerAPI, None, None]:
-    yield from request.param()
-
-
-@pytest.fixture(scope="module", params=system_fixtures_authn_rbac_authz())
-def system_authn_rbac_authz(
-    request: pytest.FixtureRequest,
-) -> Generator[ServerAPI, None, None]:
-    yield from request.param()
-
-
 @pytest.fixture(scope="module", params=system_http_server_fixtures())
 def system_http_server(
     request: pytest.FixtureRequest,
@@ -745,16 +472,6 @@ def system_http_server(
 
 @pytest.fixture(scope="module", params=system_fixtures())
 def system(request: pytest.FixtureRequest) -> Generator[ServerAPI, None, None]:
-    yield from request.param()
-
-
-@pytest.fixture(scope="module", params=system_fixtures_ssl())
-def system_ssl(request: pytest.FixtureRequest) -> Generator[ServerAPI, None, None]:
-    yield from request.param()
-
-
-@pytest.fixture(scope="module", params=system_fixtures_auth())
-def system_auth(request: pytest.FixtureRequest) -> Generator[ServerAPI, None, None]:
     yield from request.param()
 
 

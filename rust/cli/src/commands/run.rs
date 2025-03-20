@@ -47,7 +47,7 @@ fn override_default_config_with_args(args: RunArgs) -> Result<FrontendServerConf
     let mut config = FrontendServerConfig::single_node_default();
 
     if let Some(path) = args.path {
-        config.persist_path = path;
+        config.persist_path = Some(path);
     }
 
     if let Some(port) = args.port {
@@ -70,7 +70,10 @@ fn override_default_config_with_args(args: RunArgs) -> Result<FrontendServerConf
 
 fn display_run_message(config: &FrontendServerConfig) {
     println!("{}", LOGO);
-    println!("Saving data to: {}", config.persist_path.bold());
+    println!(
+        "Saving data to: {}",
+        config.persist_path.clone().unwrap_or("".to_string()).bold()
+    );
     println!(
         "Connect to Chroma at: {}",
         format!("http://localhost:{}", config.port)

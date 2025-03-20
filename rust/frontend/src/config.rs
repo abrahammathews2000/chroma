@@ -132,8 +132,8 @@ pub struct FrontendServerConfig {
     #[serde(default)]
     pub scorecard: Vec<ScorecardRule>,
     pub open_telemetry: Option<OpenTelemetryConfig>,
-    #[serde(default = "default_persist_path")]
-    pub persist_path: String,
+    #[serde(default)]
+    pub persist_path: Option<String>,
     #[serde(default = "default_sqlite_filename")]
     pub sqlite_filename: String,
     #[serde(default)]
